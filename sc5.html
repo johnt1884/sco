@@ -904,6 +904,7 @@
                                 <label for="shortcut-opacity-slider">Shortcut Overlay Opacity (<span id="shortcut-opacity-val">40</span>%)</label>
                                 <input type="range" id="shortcut-opacity-slider" min="0" max="1" step="0.05" value="0.4">
                             </div>
+                            <button id="apply-size-all-btn" style="width: 100%; text-align: center; border-top: 1px solid #ccc; font-weight: bold;">Apply Current Size to All Projects</button>
                             <button id="revert-defaults-btn" style="width: 100%; text-align: center; border-top: 1px solid #ccc; font-weight: bold;">Revert to Default Colors</button>
                         </div>
                     </div>
@@ -1151,6 +1152,7 @@
         const optionsDropdown = document.getElementById('options-dropdown');
         const topCategoriesMenuBtn = document.getElementById('top-categories-menu-btn');
         const topCategoriesDropdown = document.getElementById('top-categories-dropdown');
+        const applySizeAllBtn = document.getElementById('apply-size-all-btn');
         const revertDefaultsBtn = document.getElementById('revert-defaults-btn');
         const rotationControls = null;
         const rotationSelector = null;
@@ -2544,6 +2546,34 @@
                 });
             }
 
+            if (applySizeAllBtn) {
+                applySizeAllBtn.addEventListener('click', () => {
+                    const hSize = hSizeSelector.value;
+                    const vSize = vSizeSelector.value;
+                    const custom = customSizeInput.value;
+
+                    const config = {
+                        hSize: hSize,
+                        vSize: vSize,
+                        custom: (hSize === 'custom' || vSize === 'custom') ? custom : null
+                    };
+
+                    const configStr = JSON.stringify(config);
+
+                    // Apply to all currently loaded projects
+                    let count = 0;
+                    for (const canvas of canvases.values()) {
+                        if (canvas.path !== undefined) {
+                            localStorage.setItem(`proj-size-${canvas.path}`, configStr);
+                            count++;
+                        }
+                    }
+
+                    alert(`Applied size settings to ${count} projects.`);
+                    layoutLandscapeThumbnails();
+                });
+            }
+
             if (revertDefaultsBtn) {
                 revertDefaultsBtn.addEventListener('click', () => {
                     const defaults = {
@@ -3156,8 +3186,13 @@
             
             rowDiv.querySelectorAll('.row-bar-btn').forEach(btn => {
                 btn.classList.remove('active');
-                if (btn.dataset.type && btn.dataset.type === type) {
-                    btn.classList.add('active');
+                const btnType = btn.dataset.type;
+                if (btnType) {
+                    if (btnType === type) {
+                        btn.classList.add('active');
+                    } else if (type === 'both-sc' && (btnType === 'root-sc' || btnType === 'subfolder-sc')) {
+                        btn.classList.add('active');
+                    }
                 }
             });
 
@@ -3246,17 +3281,29 @@
                 updateRowUI(rowDiv, videoName, projectPath);
             };
 
-            const setType = (type) => {
+            const setType = (newType) => {
                 let selection = shortcutSelections.get(key);
-                if (selection && selection.type === type) {
-                    selection.type = '';
+                if (!selection) {
+                    selection = { videoName, projectPath, subfolder, projectName, type: '', rotation: "0", flipped: false };
+                    shortcutSelections.set(key, selection);
+                }
+
+                const currentType = selection.type;
+                if (newType === 'root-sc') {
+                    if (currentType === 'root-sc') selection.type = '';
+                    else if (currentType === 'subfolder-sc') selection.type = 'both-sc';
+                    else if (currentType === 'both-sc') selection.type = 'subfolder-sc';
+                    else selection.type = 'root-sc';
+                } else if (newType === 'subfolder-sc') {
+                    if (currentType === 'subfolder-sc') selection.type = '';
+                    else if (currentType === 'root-sc') selection.type = 'both-sc';
+                    else if (currentType === 'both-sc') selection.type = 'root-sc';
+                    else selection.type = 'subfolder-sc';
+                } else if (newType === 'both-sc') {
+                    if (currentType === 'both-sc') selection.type = '';
+                    else selection.type = 'both-sc';
                 } else {
-                    if (!selection) {
-                        selection = { videoName, projectPath, subfolder, projectName, type: type, rotation: "0" };
-                        shortcutSelections.set(key, selection);
-                    } else {
-                        selection.type = type;
-                    }
+                    selection.type = (currentType === newType) ? '' : newType;
                 }
                 updateRowUI(rowDiv, videoName, projectPath);
             };
@@ -3984,8 +4031,7 @@
                 '        else { return }',
                 '    }',
                 '    \$baseName = [System.IO.Path]::GetFileNameWithoutExtension(\$videoName)',
-                '    \$extensions = @(".lnk", ".ink")',
-                '    $pattern = [regex]::Escape(\$baseName) + ".*" + "(\\.lnk|\\.ink)\$"',
+                '    $pattern = "^" + [regex]::Escape($baseName) + "(\\.[^.]*)?(\\s-\\sShortcut)?(\\.lnk|\\.ink)$"',
                 '    \$existing = Get-ChildItem -LiteralPath \$folderPath -File | Where-Object { \$_.Name -match $pattern }',
                 '    ',
                 '    if (-not $shouldExist) {',
@@ -4052,6 +4098,8 @@
                     scriptLines.push(`\$targetVideoPath = (Join-Path -Path (${targetRes}) -ChildPath '${escapedVideoName}')`);
                     
                     scriptLines.push('if (Test-Path -LiteralPath \"\\$sourceVideoPath\") {');
+                    scriptLines.push('    $targetDir = Split-Path -Parent $targetVideoPath');
+                    scriptLines.push('    if (-not (Test-Path -LiteralPath $targetDir)) { [System.IO.Directory]::CreateDirectory($targetDir) | Out-Null }');
                     scriptLines.push('    Move-Item -LiteralPath \"\\$sourceVideoPath\" -Destination \"$targetVideoPath\" -Force');
                     scriptLines.push(`    Write-Host "Moved video to: ${escapedTargetProjectPath || '(Root)'}\\${escapedVideoName}"`);
                     scriptLines.push('}');
