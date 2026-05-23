@@ -4441,7 +4441,7 @@
 
                 const initiallyInSubfolder = initial.type === 'subfolder-sc' || initial.type === 'both-sc';
                 if (initiallyInSubfolder) {
-                    summaryActions.shortcuts_delete.push(`${videoName} from ${initial.projectPath || '(Unknown)'}/sc/`);
+                    summaryActions.shortcuts_delete.push(`${videoName} from ${initial.projectPath || '(Root)'}/sc/`);
                     const subPathRes = getPSPathRes('\$BaseDir', initial.projectPath, initial.projectName, '');
                     let subPath = `Join-Path -Path (${subPathRes}) -ChildPath 'sc'`;
                     const fullScPath = `Join-Path -Path (${subPath}) -ChildPath ('${escapedVideoName}' + '.lnk')`;
@@ -5219,7 +5219,7 @@
                         let rootScEntry = checkShortcut(videoFile.name, rootProjectShortcutsSet);
 
                         // If not found in project-specific group, check if it's in a group named after the subfolder (for nested videos)
-                        if (!rootScEntry && videoFile.subfolder) {
+                        if (rootScEntry === false && videoFile.subfolder) {
                             const subfolderLeaf = videoFile.subfolder.split(/[\\/]/).pop();
                             if (subfolderLeaf) {
                                 const normalizedSubfolderLeaf = normalizeProjectKey(subfolderLeaf);
@@ -5231,7 +5231,7 @@
                         }
                         
                         // Also check the global/ungrouped shortcuts if still not found
-                        if (!rootScEntry) {
+                        if (rootScEntry === false) {
                             const globalRootScSet = rootScDataSets.get("");
                             if (globalRootScSet) {
                                 rootScEntry = checkShortcut(videoFile.name, globalRootScSet);
@@ -5377,6 +5377,9 @@
                                 buttonRotationTouched: false
                             };
                             shortcutSelections.set(key, selectionData);
+                        } else if (selectionData && initialShortcutType && !selectionData.type) {
+                            // If selection exists (e.g. from misc data) but type is empty, update it with initial type
+                            selectionData.type = initialShortcutType;
                         }
 
                         if (selectionData) {
