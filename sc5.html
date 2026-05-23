@@ -3999,7 +3999,7 @@
                 '    foreach (\$key in \$toRemove) { \$data.Remove(\$key) }',
                 '    foreach (\$key in \$toAdd.Keys) { \$data[\$key] = \$toAdd[\$key] }',
                 '    if (\$data.Count -eq 0) {',
-                '        if (Test-Path -LiteralPath "\$filePath") { Remove-Item -LiteralPath "\$filePath" }',
+                '        if (Test-Path -LiteralPath "\$filePath") { Clear-Content -LiteralPath "\$filePath" }',
                 '    } else {',
                 '        \$content = @()',
                 '        foreach (\$key in \$data.Keys) { \$content += ("{0}:{1}" -f \$key, \$data[\$key]) }',
@@ -4010,7 +4010,7 @@
                 'function Update-MiscData {',
                 '    param([string]\$filePath, [hashtable]\$miscData)',
                 '    if (\$miscData.Count -eq 0) {',
-                '        if (Test-Path -LiteralPath "\$filePath") { Remove-Item -LiteralPath "\$filePath" }',
+                '        if (Test-Path -LiteralPath "\$filePath") { Clear-Content -LiteralPath "\$filePath" }',
                 '    } else {',
                 '        \$content = @()',
                 '        foreach (\$key in \$miscData.Keys) {',
@@ -4021,7 +4021,7 @@
                 '        if (\$content.Count -gt 0) {',
                 '            \$content | Out-File -LiteralPath "\$filePath" -Encoding utf8',
                 '        } elseif (Test-Path -LiteralPath "\$filePath") {',
-                '            Remove-Item -LiteralPath "\$filePath"',
+                '            Clear-Content -LiteralPath "\$filePath"',
                 '        }',
                 '    }',
                 '}',
@@ -4509,10 +4509,10 @@
             // --- Misc Data (Categories & Edit Rotations) ---
             const miscUpdates = new Map(); // projectPath -> { videoName: dataString }
             
-            // Ensure every project folder we've loaded gets an update (to allow for full removal)
-            allProjectFolders.forEach(proj => {
-                if (proj.isProject) {
-                    miscUpdates.set(proj.path, {});
+            // Only initialize updates for projects that were actually loaded (have a canvas)
+            canvases.forEach(canvas => {
+                if (canvas.path !== undefined) {
+                    miscUpdates.set(canvas.path, {});
                 }
             });
 
