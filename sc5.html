@@ -4039,20 +4039,29 @@
                 '}',
                 '',
                 'function Manage-Shortcut {',
-                '    param([string]\$folderPath, [string]\$videoName, [string]\$targetPath, [bool]$shouldExist)',
+                '    param([string]\$folderPath, [string]\$videoName, [string]\$targetPath, [string]\$oldTargetPath, [bool]$shouldExist)',
                 '    if (-not \$folderPath) { return }',
                 '    if (-not (Test-Path -LiteralPath \$folderPath)) {',
                 '        if ($shouldExist) { [System.IO.Directory]::CreateDirectory(\$folderPath) | Out-Null }',
                 '        else { return }',
                 '    }',
+                '    \$absTarget = if (\$targetPath) { [System.IO.Path]::GetFullPath(\$targetPath).TrimEnd(\"\\\") } else { \"\" }',
+                '    \$absOldTarget = if (\$oldTargetPath) { [System.IO.Path]::GetFullPath(\$oldTargetPath).TrimEnd(\"\\\") } else { \"\" }',
                 '    \$baseName = [System.IO.Path]::GetFileNameWithoutExtension(\$videoName)',
-                '    $pattern = "^" + [regex]::Escape($baseName) + "(\\.[^.]*)?(\\s-\\sShortcut)?(\\.lnk|\\.ink)$"',
+                '    # Precise regex to match: video.mp4.lnk, video.lnk, video - Shortcut.lnk, video.mp4 - Shortcut.lnk',
+                '    $pattern = "^" + [regex]::Escape($baseName) + "(\\.[^.]+)?(\\s-\\sShortcut)?\\.(lnk|ink)$"',
                 '    \$existing = Get-ChildItem -LiteralPath \$folderPath -File | Where-Object { \$_.Name -match $pattern }',
                 '    ',
                 '    if (-not $shouldExist) {',
                 '        foreach (\$file in \$existing) {',
-                '            Write-Host "Recycling obsolete shortcut: \$(\$file.Name)" -ForegroundColor Yellow',
-                '            Send-ToRecycleBin -path \$file.FullName',
+                '            try {',
+                '                \$sc = \$wshell.CreateShortcut(\$file.FullName)',
+                '                \$scTarget = [System.IO.Path]::GetFullPath(\$sc.TargetPath).TrimEnd(\"\\\")',
+                '                if ((\$absTarget -and \$scTarget -eq \$absTarget) -or (\$absOldTarget -and \$scTarget -eq \$absOldTarget)) {',
+                '                    Write-Host "Recycling obsolete shortcut: \$(\$file.Name)" -ForegroundColor Yellow',
+                '                    Send-ToRecycleBin -path \$file.FullName',
+                '                }',
+                '            } catch {}',
                 '        }',
                 '        return',
                 '    }',
@@ -4062,7 +4071,8 @@
                 '    foreach (\$file in \$existing) {',
                 '        try {',
                 '            \$sc = \$wshell.CreateShortcut(\$file.FullName)',
-                '            if ([System.IO.Path]::GetFullPath(\$sc.TargetPath).TrimEnd(\"\\\") -eq \$targetPath.TrimEnd(\"\\\")) {',
+                '            \$scTarget = [System.IO.Path]::GetFullPath(\$sc.TargetPath).TrimEnd(\"\\\")',
+                '            if (\$absTarget -and \$scTarget -eq \$absTarget) {',
                 '                if (-not \$foundCorrect) {',
                 '                    if (\$file.FullName -ne $primaryPath) {',
                 '                        if (Test-Path -LiteralPath $primaryPath) { Send-ToRecycleBin -path $primaryPath }',
@@ -4074,12 +4084,13 @@
                 '                    Write-Host "Recycling duplicate shortcut: \$(\$file.FullName)" -ForegroundColor Gray',
                 '                    Send-ToRecycleBin -path \$file.FullName',
                 '                }',
-                '            } else {',
-                '                Write-Host "Recycling incorrect shortcut: \$(\$file.FullName)" -ForegroundColor Gray',
+                '            } elseif (\$absOldTarget -and \$scTarget -eq \$absOldTarget) {',
+                '                Write-Host "Recycling old-target shortcut: \$(\$file.FullName)" -ForegroundColor Gray',
                 '                Send-ToRecycleBin -path \$file.FullName',
                 '            }',
                 '        } catch {',
-                '            Send-ToRecycleBin -path \$file.FullName',
+                '            # If we can''t read it but it matches our name, it might be broken',
+                '            # but let''s be safe and only delete if it''s definitely not working',
                 '        }',
                 '    }',
                 '    if (-not \$foundCorrect) {',
@@ -4329,46 +4340,53 @@
                 }
 
                 if (selectionType) {
-                    scriptLines.push(`    # Managing shortcuts for: ${sel.projectPath}\\${sel.videoName} (Selection: ${selectionType})`);
-                    scriptLines.push(`    \$targetPath = [System.IO.Path]::GetFullPath(${targetPathConstruction})`);
+                    const initial = initialShortcutSelections.get(key);
+                    const initiallyInRoot = initial && (initial.type === 'root-sc' || initial.type === 'both-sc');
+                    const wantRoot = (selectionType === 'root-sc' || selectionType === 'both-sc');
+                    const initiallyInSub = initial && (initial.type === 'subfolder-sc' || initial.type === 'both-sc');
+                    const wantSub = (selectionType === 'subfolder-sc' || selectionType === 'both-sc');
 
-                // Root location
-                const initial = initialShortcutSelections.get(key);
-                const initiallyInRoot = initial && (initial.type === 'root-sc' || initial.type === 'both-sc');
-                const wantRoot = (selectionType === 'root-sc' || selectionType === 'both-sc');
+                    const rootChanged = wantRoot !== initiallyInRoot;
+                    const subChanged = wantSub !== initiallyInSub;
 
-                if (wantRoot) {
-                    if (initiallyInRoot) {
-                        summaryActions.shortcuts_verify.push(`${sel.videoName} in Root sc/`);
-                    } else {
-                        summaryActions.shortcuts_new.push(`${sel.videoName} in Root sc/`);
+                    if (rootChanged || subChanged || isMoved) {
+                        scriptLines.push(`    # Managing shortcuts for: ${sel.projectPath}\\${sel.videoName} (Selection: ${selectionType})`);
+                        scriptLines.push(`    \$targetPath = [System.IO.Path]::GetFullPath(${targetPathConstruction})`);
+
+                        if (isMoved) {
+                            const sourceBaseRes = getPSPathRes('\$BaseDir', sel.projectPath, sel.projectName, sel.subfolder);
+                            scriptLines.push(`    \$oldTargetPath = [System.IO.Path]::GetFullPath(Join-Path -Path (${sourceBaseRes}) -ChildPath '${escapedVideoName}')`);
+                        } else {
+                            scriptLines.push(`    \$oldTargetPath = ""`);
+                        }
+
+                        // Root location
+                        if (rootChanged || isMoved) {
+                            if (wantRoot) {
+                                if (initiallyInRoot) summaryActions.shortcuts_verify.push(`${sel.videoName} in Root sc/`);
+                                else summaryActions.shortcuts_new.push(`${sel.videoName} in Root sc/`);
+                            } else if (initiallyInRoot) {
+                                summaryActions.shortcuts_delete.push(`${sel.videoName} from Root sc/`);
+                            }
+                            scriptLines.push(`    Manage-Shortcut -folderPath \$rootScFolder -videoName '${escapedVideoName}' -targetPath \$targetPath -oldTargetPath \$oldTargetPath -shouldExist ${wantRoot ? '$true' : '$false'}`);
+                        }
+
+                        // Subfolder location
+                        if (subChanged || isMoved) {
+                            if (wantSub) {
+                                if (initiallyInSub) summaryActions.shortcuts_verify.push(`${sel.videoName} in ${sel.projectPath}/sc/`);
+                                else summaryActions.shortcuts_new.push(`${sel.videoName} in ${tpToUse}/sc/`);
+                            } else if (initiallyInSub) {
+                                summaryActions.shortcuts_delete.push(`${sel.videoName} from ${sel.projectPath}/sc/`);
+                            }
+                            const scProjToUse = isMoved ? sel.targetProject : sel.projectPath;
+                            const scNameToUse = isMoved ? sel.targetProject : sel.projectName;
+                            const scProjRes = getPSPathRes('\$BaseDir', scProjToUse, scNameToUse, '');
+                            let scDirPath = `Join-Path -Path (${scProjRes}) -ChildPath 'sc'`;
+                            scriptLines.push(`    Manage-Shortcut -folderPath (${scDirPath}) -videoName '${escapedVideoName}' -targetPath \$targetPath -oldTargetPath \$oldTargetPath -shouldExist ${wantSub ? '$true' : '$false'}`);
+                        }
+                        scriptLines.push('');
                     }
-                } else if (initiallyInRoot) {
-                    summaryActions.shortcuts_delete.push(`${sel.videoName} from Root sc/`);
-                }
-                scriptLines.push(`    Manage-Shortcut -folderPath \$rootScFolder -videoName '${escapedVideoName}' -targetPath \$targetPath -shouldExist ${wantRoot ? '$true' : '$false'}`);
-
-                // Subfolder location
-                const initiallyInSub = initial && (initial.type === 'subfolder-sc' || initial.type === 'both-sc');
-                const wantSub = (selectionType === 'subfolder-sc' || selectionType === 'both-sc');
-
-                if (wantSub) {
-                    if (initiallyInSub) {
-                        summaryActions.shortcuts_verify.push(`${sel.videoName} in ${sel.projectPath}/sc/`);
-                    } else {
-                        summaryActions.shortcuts_new.push(`${sel.videoName} in ${tpToUse}/sc/`);
-                    }
-                } else if (initiallyInSub) {
-                    summaryActions.shortcuts_delete.push(`${sel.videoName} from ${sel.projectPath}/sc/`);
-                }
-                    const scProjToUse = isMoved ? sel.targetProject : sel.projectPath;
-                    const scNameToUse = isMoved ? sel.targetProject : sel.projectName;
-                    const scProjRes = getPSPathRes('\$BaseDir', scProjToUse, scNameToUse, '');
-                    let scDirPath = `Join-Path -Path (${scProjRes}) -ChildPath 'sc'`;
-                    
-                    scriptLines.push(`    Manage-Shortcut -folderPath (${scDirPath}) -videoName '${escapedVideoName}' -targetPath \$targetPath -shouldExist ${wantSub ? '$true' : '$false'}`);
-
-                    scriptLines.push('');
                 }
             });
 
@@ -4429,32 +4447,33 @@
             initialShortcutSelections.forEach((initial, key) => {
                 if (handledInMainLoop.has(key)) return;
                 
+                // If it's not in shortcutSelections, it wasn't even loaded/rendered in the UI this session.
+                if (!shortcutSelections.has(key)) return;
+
                 const current = shortcutSelections.get(key);
+                // If it still has a type, it's not being deleted (though it should have been in handledInMainLoop)
                 if (current && current.type) return;
 
                 const parts = key.split('|');
                 const projectPath = parts[0];
                 const videoName = parts[1];
                 const escapedVideoName = escapePSString(videoName);
-                const escapedProjectPath = escapePSString(projectPath);
-                const escapedSubfolder = initial.subfolder ? escapePSString(initial.subfolder) : '';
+
+                const sourceBaseRes = getPSPathRes('\$BaseDir', projectPath, initial.projectName, initial.subfolder);
+                let currentTargetPath = `[System.IO.Path]::GetFullPath(Join-Path -Path (${sourceBaseRes}) -ChildPath '${escapedVideoName}')`;
 
                 const initiallyInSubfolder = initial.type === 'subfolder-sc' || initial.type === 'both-sc';
                 if (initiallyInSubfolder) {
                     summaryActions.shortcuts_delete.push(`${videoName} from ${initial.projectPath || '(Root)'}/sc/`);
                     const subPathRes = getPSPathRes('\$BaseDir', initial.projectPath, initial.projectName, '');
                     let subPath = `Join-Path -Path (${subPathRes}) -ChildPath 'sc'`;
-                    const fullScPath = `Join-Path -Path (${subPath}) -ChildPath ('${escapedVideoName}' + '.lnk')`;
-                    const logPath = (escapedProjectPath ? escapedProjectPath + '\\' : '') + (escapedSubfolder ? escapedSubfolder + '\\' : '') + escapedVideoName;
-                    deletions.push(`if (Test-Path -LiteralPath (${fullScPath})) { Send-ToRecycleBin -path (${fullScPath}); Write-Host "Recycled subfolder shortcut: ${logPath}" }`);
+                    deletions.push(`Manage-Shortcut -folderPath (${subPath}) -videoName '${escapedVideoName}' -targetPath ${currentTargetPath} -oldTargetPath '' -shouldExist \$false`);
                 }
 
                 const initiallyInRoot = initial.type === 'root-sc' || initial.type === 'both-sc';
                 if (initiallyInRoot) {
                     summaryActions.shortcuts_delete.push(`${videoName} from Root sc/`);
-                    const rootScFolder = `Join-Path -Path \"$BaseDir\" -ChildPath 'sc'`;
-                    const fullScPath = `Join-Path -Path (${rootScFolder}) -ChildPath ('${escapedVideoName}' + '.lnk')`;
-                    deletions.push(`if (Test-Path -LiteralPath (${fullScPath})) { Send-ToRecycleBin -path (${fullScPath}); Write-Host "Recycled root shortcut: ${escapedVideoName}" }`);
+                    deletions.push(`Manage-Shortcut -folderPath \$rootScFolder -videoName '${escapedVideoName}' -targetPath ${currentTargetPath} -oldTargetPath '' -shouldExist \$false`);
                 }
             });
 
@@ -5355,15 +5374,12 @@
                         });
 
                         let initialShortcutType = '';
-                        if (rootScEntry && typeof rootScEntry === 'string') {
-                            if (rootScEntry === 'BOTH') initialShortcutType = 'both-sc';
-                            else if (rootScEntry === 'ROOT') initialShortcutType = 'root-sc';
-                        }
-                        if (!initialShortcutType) {
-                            if (hasProjectSc && hasRootSc) initialShortcutType = 'both-sc';
-                            else if (hasProjectSc) initialShortcutType = 'subfolder-sc';
-                            else if (hasRootSc) initialShortcutType = 'root-sc';
-                        }
+                        const isRoot = hasRootSc || (rootScEntry === 'ROOT' || rootScEntry === 'BOTH');
+                        const isSub = hasProjectSc === true || (rootScEntry === 'BOTH');
+
+                        if (isRoot && isSub) initialShortcutType = 'both-sc';
+                        else if (isRoot) initialShortcutType = 'root-sc';
+                        else if (isSub) initialShortcutType = 'subfolder-sc';
 
                         const key = project.path + '|' + videoFile.name;
                         const loadedEditState = editModeRotatedVideos.get(key);
