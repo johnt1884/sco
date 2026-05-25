@@ -4112,10 +4112,10 @@
                     const targetRes = getPSPathRes('\$BaseDir', sel.targetProject, sel.targetProject, sel.subfolder);
                     scriptLines.push(`\$targetVideoPath = (Join-Path -Path (${targetRes}) -ChildPath '${escapedVideoName}')`);
                     
-                    scriptLines.push('if (Test-Path -LiteralPath \"\\$sourceVideoPath\") {');
-                    scriptLines.push('    $targetDir = Split-Path -Parent $targetVideoPath');
+                    scriptLines.push('if (Test-Path -LiteralPath "$sourceVideoPath") {');
+                    scriptLines.push('    $targetDir = Split-Path -Parent "$targetVideoPath"');
                     scriptLines.push('    if (-not (Test-Path -LiteralPath $targetDir)) { [System.IO.Directory]::CreateDirectory($targetDir) | Out-Null }');
-                    scriptLines.push('    Move-Item -LiteralPath \"\\$sourceVideoPath\" -Destination \"$targetVideoPath\" -Force');
+                    scriptLines.push('    Move-Item -LiteralPath "$sourceVideoPath" -Destination "$targetVideoPath" -Force');
                     scriptLines.push(`    Write-Host "Moved video to: ${escapedTargetProjectPath || '(Root)'}\\${escapedVideoName}"`);
                     scriptLines.push('}');
                     
